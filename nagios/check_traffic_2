@@ -1,0 +1,134 @@
+#!/usr/bin/env python2
+
+import argparse, sys, time, math, socket, fcntl, struct
+
+def get_ip_address(ifname):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    return socket.inet_ntoa(fcntl.ioctl(
+        s.fileno(),
+        0x8915,  # SIOCGIFADDR
+        struct.pack('256s', ifname[:15])
+    )[20:24])
+
+def convert_size(size_bytes):
+   if size_bytes == 0:
+       return "0"
+   size_name = ("", "K", "M", "G", "T", "P", "E", "Z", "Y")
+   i = int(math.floor(math.log(size_bytes, 1024)))
+   p = math.pow(1024, i)
+   s = round(size_bytes / p, 2)
+   return "%s %s" % (s, size_name[i])
+
+parser = argparse.ArgumentParser(description = 'Check used disk space, designed for use with icinga or nagios')
+parser.add_argument('-w', '--warning', type=str, default="0", help='Set network speed (rx OR tx) warning threshold in bps', required=True)
+parser.add_argument('-c', '--critical', type=str, default="0", help="Set network speed (rx OR tx) critical threshold in bps", required=True)
+parser.add_argument('-W', '--pwarning', type=str, default="0", help='Set packets (rx OR tx) warning threshold in pps (0=disable check)')
+parser.add_argument('-C', '--pcritical', type=str, default="0", help="Set packets (rx OR tx) critical threshold in pps (0=disable check)")
+parser.add_argument('-i', '--interval', type=int, default="5", help="Set sampling interval in seconds")
+args = parser.parse_args()
+
+size_threshold_warning = int(args.warning)
+size_threshold_critical = int(args.critical)
+psize_threshold_warning = int(args.pwarning)
+psize_threshold_critical = int(args.pcritical)
+interval = int(args.interval)
+
+return_code = 0
+result = ""
+stats = ""
+
+dev_0 = []
+dev_5 = []
+interfaces = {}
+
+# Gather data
+with open("/proc/net/dev") as mf:
+    dev_0 = mf.readlines()
+time.sleep(interval)
+with open("/proc/net/dev") as mf:
+    dev_5 = mf.readlines()
+    
+for line in dev_0:
+    data = line.split();
+    if data[0] == "Inter-|" or data[0] == "face" or data[0] == "lo:" or "veth" in data[0]:
+        continue
+    data[0] = data[0][:-1]
+    interfaces[data[0]] = {}
+    interfaces[data[0]]['name'] = data[0]
+    interfaces[data[0]]['address'] = get_ip_address(data[0])
+    interfaces[data[0]]["rx_bytes_0"] = data[1]
+    interfaces[data[0]]["rx_packets_0"] = data[2]
+    interfaces[data[0]]["rx_errors_0"] = data[3]
+    interfaces[data[0]]["rx_drops_0"] = data[4]
+    interfaces[data[0]]["rx_fifo_0"] = data[5]
+    interfaces[data[0]]["rx_frame_0"] = data[6]
+    interfaces[data[0]]["rx_compressed_0"] = data[7]
+    interfaces[data[0]]["rx_multicast_0"] = data[8]
+    interfaces[data[0]]["tx_bytes_0"] = data[9]
+    interfaces[data[0]]["tx_packets_0"] = data[10]
+    interfaces[data[0]]["tx_errors_0"] = data[11]
+    interfaces[data[0]]["tx_drop_0"] = data[12]
+    interfaces[data[0]]["tx_fifo_0"] = data[13]
+    interfaces[data[0]]["tx_colls_0"] = data[14]
+    interfaces[data[0]]["tx_carrier_0"] = data[15]
+    interfaces[data[0]]["tx_compressed_0"] = data[16]
+
+for line in dev_5:
+    data = line.split();
+    if data[0] == "Inter-|" or data[0] == "face" or data[0] == "lo:" or "veth" in data[0]:
+        continue
+    data[0] = data[0][:-1]
+    interfaces[data[0]]["rx_bytes_5"] = data[1]
+    interfaces[data[0]]["rx_packets_5"] = data[2]
+    interfaces[data[0]]["rx_errors_5"] = data[3]
+    interfaces[data[0]]["rx_drops_5"] = data[4]
+    interfaces[data[0]]["rx_fifo_5"] = data[5]
+    interfaces[data[0]]["rx_frame_5"] = data[6]
+    interfaces[data[0]]["rx_compressed_5"] = data[7]
+    interfaces[data[0]]["rx_multicast_5"] = data[8]
+    interfaces[data[0]]["tx_bytes_5"] = data[9]
+    interfaces[data[0]]["tx_packets_5"] = data[10]
+    interfaces[data[0]]["tx_errors_5"] = data[11]
+    interfaces[data[0]]["tx_drop_5"] = data[12]
+    interfaces[data[0]]["tx_fifo_5"] = data[13]
+    interfaces[data[0]]["tx_colls_5"] = data[14]
+    interfaces[data[0]]["tx_carrier_5"] = data[15]
+    interfaces[data[0]]["tx_compressed_5"] = data[16]
+
+for i in interfaces.itervalues():
+    i["rx_bps"] = (float(i["rx_bytes_5"]) - float(i["rx_bytes_0"])) / interval * 8
+    i["tx_bps"] = (float(i["tx_bytes_5"]) - float(i["tx_bytes_0"])) / interval * 8
+    i["rx_pps"] = (float(i["rx_packets_5"]) - float(i["rx_packets_0"])) / interval * 8
+    i["tx_pps"] = (float(i["tx_packets_5"]) - float(i["tx_packets_0"])) / interval * 8
+    i["rx_eps"] = (float(i["rx_errors_5"]) - float(i["rx_errors_0"])) / interval * 8
+    i["tx_eps"] = (float(i["tx_errors_5"]) - float(i["tx_errors_0"])) / interval * 8
+
+    result += "%s rx %sbps (%spkt/s) tx %sbps (%spkt/s) " % ( i['address'], convert_size(i['rx_bps']), convert_size(i['rx_pps']), convert_size(i['tx_bps']), convert_size(i['tx_pps']) )
+    stats += "%s.bps.rx=%d;%d;%d;; " % ( i['address'], i['rx_bps'], size_threshold_warning, size_threshold_critical )
+    stats += "%s.bps.tx=%d;%d;%d;; " % ( i['address'], i['tx_bps'], size_threshold_warning, size_threshold_critical )
+    stats += "%s.pps.rx=%d;%s;%s;; " % ( i['address'], i['rx_pps'], psize_threshold_warning if psize_threshold_warning > 0 else "", psize_threshold_critical if psize_threshold_critical > 0 else "" )
+    stats += "%s.pps.tx=%d;%s;%s;; " % ( i['address'], i['tx_pps'], psize_threshold_warning if psize_threshold_warning > 0 else "", psize_threshold_critical if psize_threshold_critical > 0 else "" )
+    stats += "%s.eps.rx=%d;;;; " % ( i['address'], i['rx_eps'] )
+    stats += "%s.eps.tx=%d;;;; " % ( i['address'], i['tx_eps'] )
+
+    if i['rx_bps'] >= size_threshold_critical or i['tx_bps'] >= size_threshold_critical:
+        return_code = 2
+    elif i['rx_bps'] >= size_threshold_warning or i['tx_bps'] >= size_threshold_warning:
+        if (return_code < 1):
+            return_code = 1
+
+    if psize_threshold_critical > 0 and ( i['rx_pps'] >= psize_threshold_critical or i['tx_pps'] >= psize_threshold_critical ):
+        return_code = 2
+    elif psize_threshold_warning > 0 and ( i['rx_pps'] >= psize_threshold_warning or i['tx_pps'] >= psize_threshold_warning ):
+        if (return_code < 1):
+            return_code = 1
+
+status = "OK"
+if return_code == 1:
+    status = "WARNING"
+elif return_code == 2:
+    status = "CRITICAL"
+
+print "%s - IF TRAFFIC: %s | %s" % (status, result, stats);
+
+sys.exit(return_code);

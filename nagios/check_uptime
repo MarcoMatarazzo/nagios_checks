@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+
+#Set script name
+SCRIPT=`basename ${BASH_SOURCE[0]}`
+
+#Set default values
+WARN_VALUE=90
+CRIT_VALUE=180
+
+# help function
+function printHelp {
+  echo -e \\n"Help for $SCRIPT"\\n
+  echo "Basic usage: $SCRIPT -w {warning} -c {critical}"
+  echo "Command switches are optional, default values for warning is 90 and critical is 180"
+  echo "-w - Sets warning value for uptime days. Default is 90."
+  echo "-c - Sets critical value for uptime days. Default is 180."
+  echo "-h  - Displays this help message"
+  echo "Example: $SCRIPT -w 30 -c 60"
+  exit 1
+}
+
+# regex to check is OPTARG an integer
+re='^[0-9]+$'
+
+while getopts :w:c:h FLAG; do
+  case $FLAG in
+    w)
+      if ! [[ $OPTARG =~ $re ]] ; then
+        echo "error: w not a number" >&2; exit 1
+      else
+        WARN_VALUE=$OPTARG
+      fi
+      ;;
+    c)
+      if ! [[ $OPTARG =~ $re ]] ; then
+        echo "error: c not a number" >&2; exit 1
+      else
+        CRIT_VALUE=$OPTARG
+      fi
+      ;;
+    h)
+      printHelp
+      ;;
+    \?)
+      echo -e \\n"Option - $OPTARG not allowed."
+      printHelp
+      exit 2
+      ;;
+  esac
+done
+
+TA=`uptime`
+NUM=`echo $TA | grep -aob 'day' | grep -oE '[0-9]+'`
+DAYS=`echo ${TA:12:NUM} | cut -d " " -f1`
+
+if [[ -z "$DAYS" ]]; then
+  echo "OK. Uptime is less than 1 day."
+  exit 0
+fi
+
+if [[ "$DAYS" -lt "$WARN_VALUE" ]]; then
+  echo "OK. Uptime is $DAYS days."
+  exit 0
+fi
+
+if [ "$DAYS" -ge "$WARN_VALUE" ] && [ "$DAYS" -le "$CRIT_VALUE" ]; then
+  echo "WARNING! Uptime is $DAYS days."
+  exit 1
+fi
+
+if [[ "$DAYS" -gt "$CRIT_VALUE" ]]; then
+  echo "CRITICAL! Uptime is $DAYS days."
+  exit 2
+fi

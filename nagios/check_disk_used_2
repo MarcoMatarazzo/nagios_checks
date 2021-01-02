@@ -1,0 +1,104 @@
+#!/usr/bin/env python2
+
+import argparse, sys, os, math
+
+def is_ignored(fs, mp):
+    if fs == "rpc_pipefs" or \
+       mp == "/proc" or \
+       mp == "/run"  or \
+       mp == "/sys"  or \
+       mp == "/dev"  or \
+       mp.startswith("/proc/") or \
+       mp.startswith("/dev/")  or \
+       mp.startswith("/sys/")  or \
+       mp.startswith("/run/")  or \
+       mp.startswith("/snap/") or \
+       mp.startswith("/var/lib/") :
+        return True
+    return False
+
+def convert_size(used_bytes,size_bytes):
+   if size_bytes == 0:
+       return "0/0 B"
+   size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+   i = int(math.floor(math.log(size_bytes, 1024)))
+   p = math.pow(1024, i)
+   s_s = round(size_bytes / p, 2)
+   s_u = round(used_bytes / p, 2)
+   return "%s/%s %s" % (s_u, s_s, size_name[i])
+
+parser = argparse.ArgumentParser(description = 'Check used disk space, designed for use with icinga or nagios')
+parser.add_argument('-w', '--warning', type=str, default="20%", help='Set used space warning threshold in percent (without percent symbol)', required=True)
+parser.add_argument('-c', '--critical', type=str, default="5%", help="Set used space critical threshold in percents (without percent symbol)", required=True)
+parser.add_argument('-W', '--iwarning', type=str, default="20%", help='Set used inodes warning threshold in percent (without percent symbol)', required=True)
+parser.add_argument('-C', '--icritical', type=str, default="5%", help="Set used inodes critical threshold in percents (without percent symbol)", required=True)
+args = parser.parse_args()
+
+size_threshold_warning = int(args.warning)
+size_threshold_critical = int(args.critical)
+isize_threshold_warning = int(args.iwarning)
+isize_threshold_critical = int(args.icritical)
+
+return_code = 0
+text = ""
+warnings = ""
+criticals = ""
+stats = ""
+
+#open /proc/mounts
+mounts = []
+with open("/proc/mounts") as mf:
+    mounts = mf.readlines()
+
+for line in mounts:
+    ls = line.split(' ');
+    if len(ls) < 2:
+        raise Exception("Not enough information about mount: " + line);
+    if is_ignored(ls[0], ls[1]):
+        continue
+    if ls[2] == 'nfs4':
+        continue
+
+    mp = ls[1]
+    stat = os.statvfs(mp);
+    size = float(stat.f_bsize * stat.f_blocks) # TOTAL SPACE
+    if size == 0:
+        raise Exception("size of " + mp + " is 0");
+    isize = float(stat.f_files) # TOTAL INODES
+    if isize == 0:
+        raise Exception("inodes for " + mp + " are 0");
+    free = float(stat.f_bsize * stat.f_bavail) # FREE SPACE
+    ifree = float(stat.f_favail) # FREE INODES
+    free_percent = int((free / size) * 100) # FREE SPACE in PERCENT
+    ifree_percent = int((ifree / isize) * 100) # FREE INODES in PERCENT
+    used = size - free # USED SPACE
+    iused = isize - ifree # USED INODES
+    used_percent = int((used / size) * 100) # USED SPACE in PERCENT
+    iused_percent = int((iused / isize) * 100) # USED INODES in PERCENT
+    mc = convert_size(used,size)
+    result = "%s %s (%s%% inode=%s%%) " % (mp, mc, used_percent, iused_percent)
+
+    if used_percent >= size_threshold_critical or iused_percent >= isize_threshold_critical:
+        criticals += result
+        return_code = 2
+    elif used_percent >= size_threshold_warning or iused_percent >= isize_threshold_warning:
+        warnings += result
+        if (return_code < 1):
+            return_code = 1
+    else:
+        text += result
+
+    stats += "%s_size=%d;;;0;%d " % (mp, used, size)
+    stats += "%s_pct=%d;%d;%d;0;100 " % (mp, used_percent, size_threshold_warning, size_threshold_critical)
+    stats += "%s_isize=%d;;;0;%d " % (mp, iused, isize)
+    stats += "%s_ipct=%d;%d;%d;0;100 " % (mp, iused_percent, isize_threshold_warning, isize_threshold_critical)
+
+status = "OK"
+if return_code == 1:
+    status = "WARNING"
+elif return_code == 2:
+    status = "CRITICAL"
+
+print "%s - DISK used space: %s%s%s | %s" % (status, criticals, warnings, text, stats);
+
+sys.exit(return_code);
